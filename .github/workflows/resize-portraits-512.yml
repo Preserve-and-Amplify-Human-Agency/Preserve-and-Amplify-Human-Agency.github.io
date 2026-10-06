@@ -1,0 +1,103 @@
+name: Prepare 512px portraits
+on:
+  push:
+    branches: [perf/portraits-512]
+    paths: [.github/workflows/resize-portraits-512.yml]
+permissions:
+  contents: write
+jobs:
+  resize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install image tools
+        run: python -m pip install Pillow==12.3.0
+      - name: Regenerate and validate portraits
+        run: |
+          python - <<'PY'
+          import hashlib
+          import io
+          import json
+          from html.parser import HTMLParser
+          from pathlib import Path
+          from urllib.parse import urlsplit
+          from PIL import Image, ImageCms, ImageOps
+
+          class PortraitParser(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.portraits = []
+              def handle_starttag(self, tag, attrs):
+                  attrs = dict(attrs)
+                  if tag == 'img' and 'portrait' in attrs.get('class', '').split():
+                      self.portraits.append(attrs)
+
+          html_path = Path('index.html')
+          original_html = html_path.read_text()
+          html = original_html
+          parser = PortraitParser()
+          parser.feed(html)
+          assert len(parser.portraits) == 14
+          sources = [Path(urlsplit(item['src']).path).with_suffix('.png') for item in parser.portraits]
+          protected = sources + list(Path('images').glob('header*')) + list(Path('.').glob('*.css')) + list(Path('.').glob('*.js'))
+          protected_hashes = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in protected}
+          rows = []
+          replacements = []
+          for attrs in parser.portraits:
+              old_src = attrs['src']
+              path = Path(urlsplit(old_src).path)
+              assert path.parent == Path('images') and path.suffix == '.webp'
+              source = path.with_suffix('.png')
+              before = path.stat().st_size
+              with Image.open(source) as original:
+                  image = ImageOps.exif_transpose(original)
+                  assert image.size == (600, 600), (str(source), image.size)
+                  alpha = image.convert('RGBA').getchannel('A') if 'A' in image.getbands() or 'transparency' in image.info else None
+                  icc = image.info.get('icc_profile')
+                  if icc:
+                      image = ImageCms.profileToProfile(image.convert('RGB'), ImageCms.ImageCmsProfile(io.BytesIO(icc)), ImageCms.createProfile('sRGB'), outputMode='RGB')
+                  else:
+                      image = image.convert('RGB')
+                  if alpha is not None:
+                      image.putalpha(alpha)
+                  image = image.resize((512, 512), Image.Resampling.LANCZOS)
+                  image.save(path, format='WEBP', quality=82, method=6)
+              with Image.open(path) as result:
+                  result.load()
+                  assert result.format == 'WEBP' and result.size == (512, 512)
+              after = path.stat().st_size
+              assert after < source.stat().st_size
+              new_src = path.as_posix() + '?size=512'
+              old_attr, new_attr = f'src="{old_src}"', f'src="{new_src}"'
+              assert html.count(old_attr) == 1
+              html = html.replace(old_attr, new_attr)
+              replacements.append((old_attr, new_attr))
+              rows.append({'image': str(path), 'original_png_bytes': source.stat().st_size, 'previous_webp_bytes': before, 'new_webp_bytes': after, 'dimensions': [512, 512]})
+          reconstructed = html
+          for old, new in replacements:
+              reconstructed = reconstructed.replace(new, old)
+          assert reconstructed == original_html, 'Unexpected HTML change'
+          after_parser = PortraitParser()
+          after_parser.feed(html)
+          assert len(after_parser.portraits) == 14
+          for before_attrs, after_attrs in zip(parser.portraits, after_parser.portraits):
+              assert {k:v for k,v in before_attrs.items() if k != 'src'} == {k:v for k,v in after_attrs.items() if k != 'src'}
+          for path, digest in protected_hashes.items():
+              assert hashlib.sha256(Path(path).read_bytes()).hexdigest() == digest, f'Unexpected change to {path}'
+          html_path.write_text(html)
+          report = {'portraits': rows, 'portrait_count': 14, 'dimensions': [512, 512], 'quality': 82, 'total_original_png_bytes': sum(row['original_png_bytes'] for row in rows), 'total_previous_webp_bytes': sum(row['previous_webp_bytes'] for row in rows), 'total_new_webp_bytes': sum(row['new_webp_bytes'] for row in rows), 'originals_headers_css_and_javascript_unchanged': True, 'only_html_change_is_portrait_cache_urls': True}
+          report['reduction_vs_original_percent'] = round(100 * (1 - report['total_new_webp_bytes'] / report['total_original_png_bytes']), 2)
+          print('PORTRAIT_REPORT=' + json.dumps(report), flush=True)
+          PY
+      - name: Commit verified images and remove temporary workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add images/*.webp index.html
+          git rm .github/workflows/resize-portraits-512.yml
+          git commit -m "Increase portrait images to 512px from preserved originals"
+          git push origin HEAD:perf/portraits-512
