@@ -1,9 +1,9 @@
 # Human-AI Collaboration in Open-Ended Domains
 
-Website for the ICLR 2027 workshop proposal.
+The ICLR 2027 workshop proposal website is now hosted at:
 
-https://preserve-and-amplify-human-agency.github.io/
+https://human-ai-collaboration-workshop-2027.github.io/
 
-The site uses plain HTML, CSS, and JavaScript, with no build step. Edit `index.html` for content, `styles.css` for layout, and `images/` for artwork and portraits. GitHub Pages publishes the `main` branch from the repository root.
+This repository keeps https://preserve-and-amplify-human-agency.github.io/ available as a forwarding site. Both `index.html` and `404.html` redirect visitors to the new hostname while preserving the requested path, query parameters, and fragment. A link to the new homepage remains available when JavaScript is disabled.
 
-The square GitHub logo is `images/logo.png`; the browser icons are `favicon.svg` and `favicon.ico`.
+GitHub Pages publishes the `main` branch from the repository root with no build step. Existing artwork, portraits, styles, scripts, and Git history are retained here; make future workshop content changes in the new website's repository.
